@@ -8,6 +8,7 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Mess
 
 BOT_TOKEN = "8345550172:AAFI4kVkebbzcRUQGVsRktz6FSZElJdWzXU"
 CHANNEL_URL = "https://www.youtube.com/@Sandyz03/shorts"
+COOKIES = None
 DOWNLOAD_DIR = "downloads"
 PENDING_FILE = "pending_videos.json"
 DOWNLOADED_FILE = "downloaded.json"
@@ -33,12 +34,20 @@ def fetch_shorts_list(count):
         "extract_flat": True,
         "playlist_end": count,
         "ignoreerrors": True,
+        "socket_timeout": 30,
+        "extractor_args": {"youtubetab": {"skip": ["authcheck"]}},
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(CHANNEL_URL, download=False)
+        if not info:
+            return []
+        entries = info.get("entries", [])
+        # flatten nested entries if needed
+        if entries and isinstance(entries[0], dict) and "entries" in entries[0]:
+            entries = entries[0]["entries"]
         results = []
-        for e in info.get("entries", []):
-            if not e:
+        for e in entries:
+            if not e or not e.get("id"):
                 continue
             duration_sec = e.get("duration") or 0
             results.append({
@@ -87,12 +96,13 @@ async def handle_count(update: Update, context: ContextTypes.DEFAULT_TYPE):
     count = int(text)
     context.user_data["waiting_for_count"] = False
 
-    await update.message.reply_text(f"YouTube se {count} Shorts fetch ho rahi hain, thoda wait karein...")
+    await update.message.reply_text(f"⏳ YouTube se {count} Shorts fetch ho rahi hain, 30-60 sec wait karein...")
 
     try:
-        videos = fetch_shorts_list(count)
+        import asyncio
+        videos = await asyncio.get_event_loop().run_in_executor(None, fetch_shorts_list, count)
     except Exception as e:
-        await update.message.reply_text(f"Error: {e}")
+        await update.message.reply_text(f"❌ Error: {e}")
         return
 
     if not videos:
