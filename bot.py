@@ -57,7 +57,7 @@ def fetch_shorts_list(count):
         return results
 
 
-def download_video(url: str) -> str:
+def download_video(url: str):
     ydl_opts = {
         "outtmpl": f"{DOWNLOAD_DIR}/%(id)s.%(ext)s",
         "format": "mp4/best[ext=mp4]/best",
@@ -65,7 +65,7 @@ def download_video(url: str) -> str:
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
-        return ydl.prepare_filename(info)
+        return ydl.prepare_filename(info), info.get("description") or "N/A", info.get("uploader") or "N/A"
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -143,8 +143,9 @@ async def send_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(f"⬇️ Download ho rahi hai: {video['title']}")
 
     try:
-        filepath = await asyncio.get_event_loop().run_in_executor(None, download_video, video["url"])
-        caption = f"🎬 {video['title']}\n👁 {video.get('views', 0):,} views"
+        filepath, description, channel = await asyncio.get_event_loop().run_in_executor(None, download_video, video["url"])
+        desc = description[:800] + "..." if len(description) > 800 else description
+        caption = f"🎬 {video['title']}\n📺 {channel}\n👁 {video.get('views', 0):,} views\n\n📝 {desc}"
         with open(filepath, "rb") as vf:
             await query.message.reply_video(video=vf, caption=caption)
         os.remove(filepath)
