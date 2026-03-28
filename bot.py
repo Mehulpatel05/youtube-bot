@@ -30,7 +30,7 @@ def save_json(path, data):
 def fetch_shorts_list(count):
     ydl_opts = {
         "quiet": True,
-        "extract_flat": False,
+        "extract_flat": True,
         "playlist_end": count,
         "ignoreerrors": True,
     }
