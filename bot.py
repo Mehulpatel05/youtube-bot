@@ -1,14 +1,14 @@
 import os
 import json
+import asyncio
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import yt_dlp
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
-BOT_TOKEN = "8345550172:AAFI4kVkebbzcRUQGVsRktz6FSZElJdWzXU"
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8345550172:AAFI4kVkebbzcRUQGVsRktz6FSZElJdWzXU")
 CHANNEL_URL = "https://www.youtube.com/@Sandyz03/shorts"
-COOKIES = None
 DOWNLOAD_DIR = "downloads"
 PENDING_FILE = "pending_videos.json"
 DOWNLOADED_FILE = "downloaded.json"
@@ -42,24 +42,17 @@ def fetch_shorts_list(count):
         if not info:
             return []
         entries = info.get("entries", [])
-        # flatten nested entries if needed
         if entries and isinstance(entries[0], dict) and "entries" in entries[0]:
             entries = entries[0]["entries"]
         results = []
-        for e in entries:
+        for e in entries[:count]:
             if not e or not e.get("id"):
                 continue
-            duration_sec = e.get("duration") or 0
             results.append({
                 "id": e["id"],
                 "title": e.get("title", e["id"]),
                 "url": f"https://www.youtube.com/shorts/{e['id']}",
-                "description": (e.get("description") or "N/A").strip(),
                 "views": e.get("view_count") or 0,
-                "likes": e.get("like_count") or 0,
-                "duration": f"{duration_sec // 60}:{duration_sec % 60:02d}",
-                "upload_date": e.get("upload_date") or "N/A",
-                "channel": e.get("uploader") or "N/A",
             })
         return results
 
@@ -96,10 +89,9 @@ async def handle_count(update: Update, context: ContextTypes.DEFAULT_TYPE):
     count = int(text)
     context.user_data["waiting_for_count"] = False
 
-    await update.message.reply_text(f"⏳ YouTube se {count} Shorts fetch ho rahi hain, 30-60 sec wait karein...")
+    await update.message.reply_text(f"⏳ YouTube se {count} Shorts fetch ho rahi hain, thoda wait karein...")
 
     try:
-        import asyncio
         videos = await asyncio.get_event_loop().run_in_executor(None, fetch_shorts_list, count)
     except Exception as e:
         await update.message.reply_text(f"❌ Error: {e}")
@@ -114,37 +106,24 @@ async def handle_count(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     new_count = 0
     for v in videos:
-        if v["id"] in downloaded:
-            continue  # already downloaded, skip
-        pending[v["id"]] = v
-        new_count += 1
+        if v["id"] not in downloaded:
+            pending[v["id"]] = v
+            new_count += 1
 
     save_json(PENDING_FILE, pending)
 
     if new_count == 0:
-        await update.message.reply_text("✅ Saari videos pehle se download ho chuki hain. Koi nayi nahi mili.")
+        await update.message.reply_text("✅ Saari videos pehle se download ho chuki hain.")
         return
 
-    await update.message.reply_text(f"✅ {new_count} nayi Shorts mili (already downloaded skip ki gayi):")
+    await update.message.reply_text(f"✅ {new_count} nayi Shorts mili:")
 
     for v in videos:
         if v["id"] in downloaded:
             await update.message.reply_text(f"⏭️ Already downloaded: {v['title']}")
             continue
         keyboard = [[InlineKeyboardButton("📤 Send to Telegram", callback_data=f"send_{v['id']}")]]
-        date = v.get('upload_date', 'N/A')
-        formatted_date = f"{date[:4]}-{date[4:6]}-{date[6:]}" if date != 'N/A' else 'N/A'
-        desc = v.get('description', 'N/A')
-        short_desc = desc[:200] + "..." if len(desc) > 200 else desc
-        info_text = (
-            f"🎬 {v['title']}\n"
-            f"📺 Channel: {v.get('channel', 'N/A')}\n"
-            f"📅 Upload Date: {formatted_date}\n"
-            f"⏱ Duration: {v.get('duration', 'N/A')}\n"
-            f"👁 Views: {v.get('views', 0):,}\n"
-            f"👍 Likes: {v.get('likes', 0):,}\n"
-            f"📝 Description:\n{short_desc}"
-        )
+        info_text = f"🎬 {v['title']}\n👁 Views: {v.get('views', 0):,}\n🔗 {v['url']}"
         await update.message.reply_text(info_text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 
@@ -164,27 +143,14 @@ async def send_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(f"⬇️ Download ho rahi hai: {video['title']}")
 
     try:
-        filepath = download_video(video["url"])
-        date = video.get('upload_date', 'N/A')
-        formatted_date = f"{date[:4]}-{date[4:6]}-{date[6:]}" if date != 'N/A' else 'N/A'
-        desc = video.get('description', 'N/A')
-        short_desc = desc[:800] + "..." if len(desc) > 800 else desc
-        caption = (
-            f"🎬 {video['title']}\n"
-            f"📺 {video.get('channel', 'N/A')}\n"
-            f"📅 {formatted_date} | ⏱ {video.get('duration', 'N/A')}\n"
-            f"👁 {video.get('views', 0):,} views | 👍 {video.get('likes', 0):,} likes\n\n"
-            f"📝 {short_desc}"
-        )
+        filepath = await asyncio.get_event_loop().run_in_executor(None, download_video, video["url"])
+        caption = f"🎬 {video['title']}\n👁 {video.get('views', 0):,} views"
         with open(filepath, "rb") as vf:
             await query.message.reply_video(video=vf, caption=caption)
         os.remove(filepath)
 
-        # Mark as downloaded so it won't repeat
         downloaded[video_id] = video["title"]
         save_json(DOWNLOADED_FILE, downloaded)
-
-        # Remove from pending
         pending.pop(video_id, None)
         save_json(PENDING_FILE, pending)
 
@@ -198,17 +164,14 @@ class HealthHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b"OK")
+
     def log_message(self, format, *args):
         pass
 
 
-def run_health_server():
-    port = int(os.environ.get("PORT", 8080))
-    HTTPServer(("", port), HealthHandler).serve_forever()
-
-
 def main():
-    threading.Thread(target=run_health_server, daemon=True).start()
+    port = int(os.environ.get("PORT", 8080))
+    threading.Thread(target=lambda: HTTPServer(("", port), HealthHandler).serve_forever(), daemon=True).start()
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("fetch", fetch))
