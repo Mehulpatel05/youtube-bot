@@ -79,3 +79,10 @@ printf("CRC Check Failed: Errors Detected.\n");
 } 
 return 0; 
 }
+
+
+
+
+
+1101
+1011
